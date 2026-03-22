@@ -12,12 +12,23 @@ class SelectionObserver {
     private let fallbackCopyEnabled = UserDefaults.standard.object(forKey: "FallbackCopyEnabled") as? Bool ?? true
     private let fallbackBundleIdentifiers: Set<String> = [
         "net.whatsapp.WhatsApp",
+        "com.whatsapp.WhatsApp",
+        "com.whatsapp.desktop",
         "ru.keepcoder.Telegram",
         "com.tdesktop.Telegram",
+        "org.telegram.desktop",
+        "org.telegram.TelegramDesktop",
         "com.hnc.Discord",
         "com.tinyspeck.slackmacgap",
         "dev.warp.Warp-Stable",
         "dev.warp.Warp"
+    ]
+    private let fallbackNameKeywords: [String] = [
+        "whatsapp",
+        "telegram",
+        "discord",
+        "slack",
+        "warp"
     ]
     private var isPermissionAvailable: Bool {
         AXIsProcessTrusted()
@@ -204,12 +215,11 @@ class SelectionObserver {
         guard fallbackCopyEnabled else { return }
         guard isPermissionAvailable else { return }
 
-        guard let frontApp = NSWorkspace.shared.frontmostApplication,
-              let bundleIdentifier = frontApp.bundleIdentifier,
-              fallbackBundleIdentifiers.contains(bundleIdentifier)
-        else {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication else {
             return
         }
+        guard shouldUseFallback(for: frontApp) else { return }
+        let bundleIdentifier = frontApp.bundleIdentifier ?? "unknown"
 
         let now = Date()
         guard now.timeIntervalSince(lastFallbackAttemptAt) > fallbackCooldownSeconds else { return }
@@ -248,6 +258,18 @@ class SelectionObserver {
         keyUp.flags = .maskCommand
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
+    }
+
+    private func shouldUseFallback(for app: NSRunningApplication) -> Bool {
+        if let bundleIdentifier = app.bundleIdentifier,
+           fallbackBundleIdentifiers.contains(bundleIdentifier) {
+            return true
+        }
+
+        let appName = app.localizedName?.lowercased() ?? ""
+        return fallbackNameKeywords.contains { keyword in
+            appName.contains(keyword)
+        }
     }
 
     private func log(_ message: String) {
