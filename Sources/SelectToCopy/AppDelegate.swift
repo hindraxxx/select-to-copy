@@ -123,6 +123,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let accessEnabled = AXIsProcessTrusted()
         if !accessEnabled {
             print("[AppDelegate] Warning: Accessibility permissions not granted. App will run with limited functionality.")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                let alert = NSAlert()
+                alert.messageText = "Enable Accessibility for SelectToCopy"
+                alert.informativeText = "SelectToCopy cannot auto-copy selections until Accessibility is enabled in System Settings > Privacy & Security > Accessibility."
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "Open System Settings")
+                alert.addButton(withTitle: "Later")
+
+                let response = alert.runModal()
+                if response == .alertFirstButtonReturn,
+                   let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
         }
     }
 }

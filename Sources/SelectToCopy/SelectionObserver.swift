@@ -4,6 +4,7 @@ import ApplicationServices
 class SelectionObserver {
     private var observer: AXObserver?
     private var globalMouseUpMonitor: Any?
+    private var globalKeyUpMonitor: Any?
     private var currentPID: pid_t = 0
     private var lastCopiedText: String = ""
     private var lastFallbackAttemptAt: Date = .distantPast
@@ -14,7 +15,9 @@ class SelectionObserver {
         "ru.keepcoder.Telegram",
         "com.tdesktop.Telegram",
         "com.hnc.Discord",
-        "com.tinyspeck.slackmacgap"
+        "com.tinyspeck.slackmacgap",
+        "dev.warp.Warp-Stable",
+        "dev.warp.Warp"
     ]
     private var isPermissionAvailable: Bool {
         AXIsProcessTrusted()
@@ -35,7 +38,11 @@ class SelectionObserver {
         }
 
         globalMouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
-            self?.attemptFallbackCopy(reason: "mouse-up")
+            self?.captureSelection(trigger: "mouse-up")
+        }
+
+        globalKeyUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyUp]) { [weak self] _ in
+            self?.captureSelection(trigger: "key-up")
         }
     }
 
@@ -43,6 +50,9 @@ class SelectionObserver {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         if let globalMouseUpMonitor {
             NSEvent.removeMonitor(globalMouseUpMonitor)
+        }
+        if let globalKeyUpMonitor {
+            NSEvent.removeMonitor(globalKeyUpMonitor)
         }
         removeCurrentObserver()
     }
@@ -127,6 +137,10 @@ class SelectionObserver {
     }
 
     private func handleSelectionChange(element: AXUIElement) {
+        captureSelection(trigger: "ax-selection-change")
+    }
+
+    private func captureSelection(trigger: String) {
         // Get the focused element to read the actual text
         var focusedElement: AnyObject?
         let systemWide = AXUIElementCreateSystemWide()
@@ -138,8 +152,7 @@ class SelectionObserver {
         )
 
         guard focusedElementResult == AXError.success, let focusedElement else {
-            log("Could not read focused UI element: \(focusedElementResult.rawValue)")
-            attemptFallbackCopy(reason: "focused-element-read-failed")
+            attemptFallbackCopy(reason: "focused-element-read-failed/\(trigger)")
             return
         }
         let focusedAXElement = focusedElement as! AXUIElement
@@ -152,19 +165,17 @@ class SelectionObserver {
         )
 
         guard selectedTextResult == AXError.success else {
-            log("Could not read selected text: \(selectedTextResult.rawValue)")
-            attemptFallbackCopy(reason: "selected-text-read-failed")
+            attemptFallbackCopy(reason: "selected-text-read-failed/\(trigger)")
             return
         }
 
         guard let text = selectedText as? String else {
-            log("Selected text value is not a String")
-            attemptFallbackCopy(reason: "selected-text-non-string")
+            attemptFallbackCopy(reason: "selected-text-non-string/\(trigger)")
             return
         }
 
         guard !text.isEmpty else {
-            attemptFallbackCopy(reason: "selected-text-empty")
+            attemptFallbackCopy(reason: "selected-text-empty/\(trigger)")
             return
         }
 
