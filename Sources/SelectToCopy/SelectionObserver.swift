@@ -3,8 +3,19 @@ import ApplicationServices
 
 class SelectionObserver {
     private var observer: AXObserver?
+    private var globalMouseUpMonitor: Any?
     private var currentPID: pid_t = 0
     private var lastCopiedText: String = ""
+    private var lastFallbackAttemptAt: Date = .distantPast
+    private let fallbackCooldownSeconds: TimeInterval = 0.35
+    private let fallbackCopyEnabled = UserDefaults.standard.object(forKey: "FallbackCopyEnabled") as? Bool ?? true
+    private let fallbackBundleIdentifiers: Set<String> = [
+        "net.whatsapp.WhatsApp",
+        "ru.keepcoder.Telegram",
+        "com.tdesktop.Telegram",
+        "com.hnc.Discord",
+        "com.tinyspeck.slackmacgap"
+    ]
     private var isPermissionAvailable: Bool {
         AXIsProcessTrusted()
     }
@@ -22,10 +33,17 @@ class SelectionObserver {
         if let frontApp = NSWorkspace.shared.frontmostApplication {
             setupObserver(for: frontApp.processIdentifier)
         }
+
+        globalMouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
+            self?.attemptFallbackCopy(reason: "mouse-up")
+        }
     }
 
     deinit {
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        if let globalMouseUpMonitor {
+            NSEvent.removeMonitor(globalMouseUpMonitor)
+        }
         removeCurrentObserver()
     }
 
@@ -121,6 +139,7 @@ class SelectionObserver {
 
         guard focusedElementResult == AXError.success, let focusedElement else {
             log("Could not read focused UI element: \(focusedElementResult.rawValue)")
+            attemptFallbackCopy(reason: "focused-element-read-failed")
             return
         }
         let focusedAXElement = focusedElement as! AXUIElement
@@ -134,15 +153,18 @@ class SelectionObserver {
 
         guard selectedTextResult == AXError.success else {
             log("Could not read selected text: \(selectedTextResult.rawValue)")
+            attemptFallbackCopy(reason: "selected-text-read-failed")
             return
         }
 
         guard let text = selectedText as? String else {
             log("Selected text value is not a String")
+            attemptFallbackCopy(reason: "selected-text-non-string")
             return
         }
 
         guard !text.isEmpty else {
+            attemptFallbackCopy(reason: "selected-text-empty")
             return
         }
 
@@ -165,6 +187,56 @@ class SelectionObserver {
         guard let oldObserver = observer else { return }
         CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(oldObserver), .defaultMode)
         observer = nil
+    }
+
+    private func attemptFallbackCopy(reason: String) {
+        guard fallbackCopyEnabled else { return }
+        guard isPermissionAvailable else { return }
+
+        guard let frontApp = NSWorkspace.shared.frontmostApplication,
+              let bundleIdentifier = frontApp.bundleIdentifier,
+              fallbackBundleIdentifiers.contains(bundleIdentifier)
+        else {
+            return
+        }
+
+        let now = Date()
+        guard now.timeIntervalSince(lastFallbackAttemptAt) > fallbackCooldownSeconds else { return }
+        lastFallbackAttemptAt = now
+
+        let pasteboard = NSPasteboard.general
+        let beforeChangeCount = pasteboard.changeCount
+        sendCommandC()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self else { return }
+            let updatedPasteboard = NSPasteboard.general
+            guard updatedPasteboard.changeCount != beforeChangeCount else { return }
+            guard let copiedText = updatedPasteboard.string(forType: .string), !copiedText.isEmpty else { return }
+            guard copiedText != self.lastCopiedText else { return }
+            self.lastCopiedText = copiedText
+            self.log("Fallback copy succeeded (\(reason)) for \(bundleIdentifier)")
+        }
+    }
+
+    private func sendCommandC() {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else {
+            log("Failed to create CGEventSource for fallback copy")
+            return
+        }
+
+        let cKeyCode: CGKeyCode = 8
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: cKeyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: cKeyCode, keyDown: false)
+        else {
+            log("Failed to create keyboard events for fallback copy")
+            return
+        }
+
+        keyDown.flags = .maskCommand
+        keyUp.flags = .maskCommand
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
     }
 
     private func log(_ message: String) {
